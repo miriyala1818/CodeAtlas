@@ -1,0 +1,143 @@
+from datetime import UTC, datetime
+from uuid import uuid4
+
+from sqlalchemy import JSON, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class Repository(Base):
+    __tablename__ = "repositories"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    url: Mapped[str] = mapped_column(String(255))
+    full_name: Mapped[str] = mapped_column(String(150))
+    branch: Mapped[str | None] = mapped_column(String(255))
+    commit_sha: Mapped[str | None] = mapped_column(String(40))
+    description: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(20), default="importing")
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    file_count: Mapped[int] = mapped_column(Integer, default=0)
+    symbol_count: Mapped[int] = mapped_column(Integer, default=0)
+    source_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    warning_count: Mapped[int] = mapped_column(Integer, default=0)
+    languages: Mapped[dict] = mapped_column(JSON, default=dict)
+    skipped: Mapped[dict] = mapped_column(JSON, default=dict)
+    resolution_configs: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    __table_args__ = (Index("ix_repositories_created_at", "created_at"),)
+
+
+class RepositoryFile(Base):
+    __tablename__ = "repository_files"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    repository_id: Mapped[str] = mapped_column(ForeignKey("repositories.id", ondelete="CASCADE"))
+    path: Mapped[str] = mapped_column(String(1000))
+    language: Mapped[str] = mapped_column(String(20))
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    source: Mapped[str] = mapped_column(Text)
+    imports: Mapped[list] = mapped_column(JSON, default=list)
+    import_references: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    warning: Mapped[str | None] = mapped_column(Text)
+    symbol_count: Mapped[int] = mapped_column(Integer)
+
+    __table_args__ = (UniqueConstraint("repository_id", "path", name="uq_file_repository_path"),)
+
+
+class CodeSymbol(Base):
+    __tablename__ = "code_symbols"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    file_id: Mapped[str] = mapped_column(ForeignKey("repository_files.id", ondelete="CASCADE"))
+    name: Mapped[str] = mapped_column(Text)
+    kind: Mapped[str] = mapped_column(String(20))
+    start_line: Mapped[int] = mapped_column(Integer)
+    end_line: Mapped[int] = mapped_column(Integer)
+    parent_id: Mapped[str | None] = mapped_column(ForeignKey("code_symbols.id", ondelete="CASCADE"))
+    parameters: Mapped[list] = mapped_column(JSON, default=list)
+
+    __table_args__ = (Index("ix_code_symbols_file_id", "file_id"),)
+
+
+class SemanticIndex(Base):
+    __tablename__ = "semantic_indexes"
+
+    repository_id: Mapped[str] = mapped_column(
+        ForeignKey("repositories.id", ondelete="CASCADE"), primary_key=True
+    )
+    fingerprint: Mapped[str] = mapped_column(String(200))
+    dimensions: Mapped[int] = mapped_column(Integer)
+    chunk_count: Mapped[int] = mapped_column(Integer)
+    skipped_long_lines: Mapped[int] = mapped_column(Integer)
+    indexed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class EmbeddingChunk(Base):
+    __tablename__ = "embedding_chunks"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    repository_id: Mapped[str] = mapped_column(
+        ForeignKey("semantic_indexes.repository_id", ondelete="CASCADE"), index=True
+    )
+    file_id: Mapped[str] = mapped_column(ForeignKey("repository_files.id", ondelete="CASCADE"))
+    path: Mapped[str] = mapped_column(String(1000))
+    language: Mapped[str] = mapped_column(String(20))
+    symbol: Mapped[str | None] = mapped_column(Text)
+    kind: Mapped[str] = mapped_column(String(20))
+    start_line: Mapped[int] = mapped_column(Integer)
+    end_line: Mapped[int] = mapped_column(Integer)
+    source: Mapped[str] = mapped_column(Text)
+    vector: Mapped[list] = mapped_column(JSON)
+
+
+class AgentRun(Base):
+    __tablename__ = "agent_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    repository_id: Mapped[str] = mapped_column(ForeignKey("repositories.id", ondelete="CASCADE"))
+    task: Mapped[str] = mapped_column(Text)
+    mode: Mapped[str] = mapped_column(
+        String(20), default="investigate", server_default="investigate"
+    )
+    test_profile: Mapped[str | None] = mapped_column(String(30))
+    changes: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}")
+    status: Mapped[str] = mapped_column(String(20), default="running")
+    model: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    plan: Mapped[list] = mapped_column(JSON, default=list)
+    steps: Mapped[list] = mapped_column(JSON, default=list)
+    result: Mapped[dict | None] = mapped_column(JSON)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    error_message: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (Index("ix_agent_runs_repository_created", "repository_id", "created_at"),)
+
+
+class TestExecution(Base):
+    __tablename__ = "test_executions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    run_id: Mapped[str] = mapped_column(ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True)
+    profile: Mapped[str] = mapped_column(String(30))
+    workspace_digest: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(20), default="running")
+    image_id: Mapped[str | None] = mapped_column(String(100))
+    exit_code: Mapped[int | None] = mapped_column(Integer)
+    stdout: Mapped[str] = mapped_column(Text, default="")
+    stderr: Mapped[str] = mapped_column(Text, default="")
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
